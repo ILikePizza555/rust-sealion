@@ -15,6 +15,8 @@ let mapped_rows = MyData::select_from("current_items").where("deleted = 0").exec
 
 # API Designs
 
+## Waterfall Style
+
 ```rust
 trait Row {
     //fn columns();
@@ -39,7 +41,7 @@ Advantages:
 Disadvantages
 - `Query::execute` needs to call `Row::columns()` and `Row::parse_row()`, which means that Query has to have an associated type with Row.
 
----
+## Piecemeal style
 
 ```rust
 trait Row {
@@ -62,3 +64,24 @@ Advantages:
 Disadvantages:
 - This api style is slightly more obtuse than the previous.
     - Might be able to be fixed by adding generic helper functions on `Query` or `Row`
+
+## "Use all the macros"-style
+
+```rust
+// rows type: (u64, String, bool)
+let rows = execute_sql!(connection,
+    SELECT id: u64, name: String, deleted: bool
+    FROM "table"
+)?;
+```
+
+Advantages:
+- Basically Foolproof
+- No derive macros
+- Wow that looks really nice and cool
+
+Disadvantages:
+- Basically have to implement an SQL parser in Rust
+    - Hard to implement
+    - I hope you like compile times
+- This pretty much only works for temporary data that will be used immediately. If you want to pass this around you need to pass a giant tuple type.
