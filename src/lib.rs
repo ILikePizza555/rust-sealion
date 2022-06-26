@@ -1,7 +1,5 @@
 use log::warn;
-use rusqlite::{Statement, Params, MappedRows};
-
-type RusqliteMappedRows<'a, R> = rusqlite::Result<MappedRows<'a, dyn Fn(&rusqlite::Row) -> rusqlite::Result<R>>>;
+use rusqlite::{Statement, Params, MappedRows, Connection, CachedStatement};
 
 pub trait Row: Sized {
     /// Returns a slice of the column names for this row.
@@ -13,7 +11,7 @@ pub trait Row: Sized {
 
     /// Returns an iterator of `Self` from an rusqlite prepared statement.
     /// It is expected that the prepared statement is a select query of somekind.
-    fn from_statement<P: Params>(statement: Statement, params: P) -> RusqliteMappedRows<'_, Self> {
+    fn from_statement<'stmt, P: Params>(statement: &'stmt mut Statement, params: P) -> rusqlite::Result<MappedRows<'stmt, fn(&rusqlite::Row) -> rusqlite::Result<Self>>> {
         check_columns(&statement, Self::columns());
         statement.query_map(params, Self::parse_row)
     }
