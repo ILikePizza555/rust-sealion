@@ -1,17 +1,47 @@
-use std::{marker::PhantomData};
+use log::warn;
+use rusqlite::{Statement, Params, MappedRows};
 
-use rusqlite::{Connection, CachedStatement};
+type RusqliteMappedRows<'a, R> = rusqlite::Result<MappedRows<'a, dyn Fn(&rusqlite::Row) -> rusqlite::Result<R>>>;
 
 pub trait Row: Sized {
     /// Returns a slice of the column names for this row.
     /// This method is primary used for building queries.
     fn columns<'a>() -> &'a[&'a str];
 
-    /// Parses an instance of Self from an rusqlite row.
+    /// Parses an instance of `Self` from an rusqlite row.
     fn parse_row(row: &rusqlite::Row) -> rusqlite::Result<Self>;
 
-    fn select_from(table_name: &str) -> SelectQuery<Self> {
-        SelectQuery::<Self> { table_name, _phantom: PhantomData }
+    /// Returns an iterator of `Self` from an rusqlite prepared statement.
+    /// It is expected that the prepared statement is a select query of somekind.
+    fn from_statement<P: Params>(statement: Statement, params: P) -> RusqliteMappedRows<'_, Self> {
+        check_columns(&statement, Self::columns());
+        statement.query_map(params, Self::parse_row)
+    }
+}
+
+fn check_columns(statement: &Statement, columns: &[& str]) {
+    if statement.column_count() != columns.len() {
+        warn!(target: "sealion_parsing_events", 
+            "Column count mismatch. Expected {} columns, statement only selects {}",
+            columns.len(),
+            statement.column_count())
+    }
+
+    let mismatched_columns: Vec<String> = statement
+        .column_names()
+        .iter()
+        .zip(columns)
+        .filter_map(|(&a, &b)| { if a.eq_ignore_ascii_case(b) {
+            Some(format!("{} != {}", a, b))
+        } else {
+            None
+        }})
+        .collect();
+    
+    if mismatched_columns.len() > 0 {
+        warn!(target: "sealion_parsing_events",
+            "Column name mismatch: {}",
+            mismatched_columns.join(", "))
     }
 }
 
