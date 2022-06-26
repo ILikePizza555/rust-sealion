@@ -48,6 +48,10 @@ pub struct SelectQuery {
 }
 
 impl SelectQuery {
+    pub fn new<S: ToString>(table_name: S) -> Self {
+        Self { table_name: table_name.to_string() }
+    }
+
     pub fn build_sql_string(&self, columns: &[&str]) -> String {
         format!("SELECT {} FROM {}", columns.join(", "), self.table_name)
     }
@@ -71,8 +75,9 @@ impl SelectQuery {
 mod tests {
     use rusqlite::Connection;
 
-    use crate::{Row};
+    use crate::{Row, SelectQuery};
 
+    #[derive(Debug, PartialEq, Eq)]
     struct TestRow {
         id: u64,
         name: String,
@@ -110,11 +115,26 @@ mod tests {
         
         let rows: Vec<rusqlite::Result<TestRow>> = 
             Row::from_statement(&mut connection.prepare("SELECT id, name, optional FROM test_table")?, [])?.collect();
-
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[1].as_ref().unwrap().name, "Apple");
+        assert_eq!(rows, vec![
+            Ok(TestRow { id: 0, name: "Orange".to_string(), optional: Some("Strawberry".to_string()) }),
+            Ok(TestRow { id: 1, name: "Apple".to_string(), optional: None }),
+            Ok(TestRow { id: 2, name: "Peach".to_string(), optional: Some("Raspberry".to_string()) })
+        ]);
 
         Ok(())
-        
+    }
+
+    #[test]
+    fn select_with_query() -> Result<(), rusqlite::Error> {
+        let connection = setup_test_db()?;
+
+        let rows: Vec<TestRow> = SelectQuery::new("test_table").execute(&connection)?;
+        assert_eq!(rows, vec![
+            TestRow { id: 0, name: "Orange".to_string(), optional: Some("Strawberry".to_string()) },
+            TestRow { id: 1, name: "Apple".to_string(), optional: None },
+            TestRow { id: 2, name: "Peach".to_string(), optional: Some("Raspberry".to_string()) }
+        ]);
+
+        Ok(())
     }
 }
