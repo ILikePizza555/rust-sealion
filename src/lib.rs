@@ -69,41 +69,50 @@ impl SelectQuery {
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::Connection;
+
     use crate::{Row};
 
-    #[test]
-    fn select_rows() -> Result<(), rusqlite::Error> {
-        // Setting up the struct and trait implementation
-        struct TestRow {
-            id: u64,
-            name: String,
-            optional: Option<String>
+    struct TestRow {
+        id: u64,
+        name: String,
+        optional: Option<String>
+    }
+
+    impl Row for TestRow {
+        fn columns<'a>() -> &'a[&'a str] {
+            &["id", "name", "optional"]
         }
 
-        impl Row for TestRow {
-            fn columns<'a>() -> &'a[&'a str] {
-                &["id", "name", "optional"]
-            }
-
-            fn parse_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
-                Ok(Self { 
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    optional: row.get(2)?
-                })
-            }
+        fn parse_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+            Ok(Self { 
+                id: row.get(0)?,
+                name: row.get(1)?,
+                optional: row.get(2)?
+            })
         }
+    }
 
-        // Open the database and insert test data
+    fn setup_test_db() -> Result<Connection, rusqlite::Error> {
         let connection = rusqlite::Connection::open_in_memory()?;
-        connection.execute(r#"
-            CREATE TABLE test_table (id INTEGER PRIMARY KEY, name TEXT NOT NULL, optional TEXT);
-            INSERT INTO test_table (id, name, optional) VALUES
-                (0, "Orange", "Strawberry"),
-                (1, "Apple", NULL),
-                (2, "Peach", "Raspberry")"#, [])?;
+        connection.execute("CREATE TABLE test_table (id INTEGER PRIMARY KEY, name TEXT NOT NULL, optional TEXT)", [])?;
+        let rows_modified = connection.execute(r#" INSERT INTO test_table (id, name, optional) VALUES
+            (0, "Orange", "Strawberry"),
+            (1, "Apple", NULL),
+            (2, "Peach", "Raspberry")"#, [])?;
+        assert_eq!(rows_modified, 3, "Test data has not been created properly.");
+        Ok(connection)
+    }
 
-        TestRow::select_from("test_table").build();
+    #[test]
+    fn select_low_level() -> Result<(), rusqlite::Error> {
+        let connection = setup_test_db()?;
+        
+        let rows: Vec<rusqlite::Result<TestRow>> = 
+            Row::from_statement(&mut connection.prepare("SELECT id, name, optional FROM test_table")?, [])?.collect();
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[1].as_ref().unwrap().name, "Apple");
 
         Ok(())
         
