@@ -43,23 +43,27 @@ fn check_columns(statement: &Statement, columns: &[& str]) {
     }
 }
 
-pub struct SelectQuery<'a, T: Row> {
-    table_name: &'a str,
-    _phantom: PhantomData<T>
+pub struct SelectQuery {
+    table_name: String,
 }
 
-impl <'a, T: Row> SelectQuery<'a, T> {
-    pub fn prepare_sql(&self) -> String {
-        let columns = T::columns().join(", ");
-        format!("SELECT {} FROM {}", columns, self.table_name);
+impl SelectQuery {
+    pub fn build_sql_string(&self, columns: &[&str]) -> String {
+        format!("SELECT {} FROM {}", columns.join(", "), self.table_name)
     }
 
-    pub fn prepare_statement<'conn>(&self, connection: &'conn Connection) -> Result<CachedStatement<'conn>, rusqlite::Error> {
-        connection.prepare_cached(&self.prepare_sql())
+    pub fn prepare_statement_columns<'conn>(&self, connection: &'conn Connection, columns: &[&str]) -> rusqlite::Result<CachedStatement<'conn>> {
+        connection.prepare_cached(&self.build_sql_string(columns))
     }
 
-    pub fn execute(&self, connection: &Connection) -> _ {
-        self.prepare_statement(connection)?.query_map([], f)
+    pub fn prepare_statement<'conn, R: Row>(&self, connection: &'conn Connection) -> rusqlite::Result<CachedStatement<'conn>> {
+        self.prepare_statement_columns(connection, R::columns())
+    }
+
+    pub fn execute<R: Row>(&self, connection: &Connection) -> rusqlite::Result<Vec<R>> {
+        let mut statement = self.prepare_statement::<R>(connection)?;
+        let rows_iterator = R::from_statement(&mut statement, [])?;
+        rows_iterator.collect()
     }
 }
 
