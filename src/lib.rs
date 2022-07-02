@@ -1,5 +1,16 @@
+use std::result;
+
 use log::warn;
 use rusqlite::{Statement, Params, MappedRows, Connection, CachedStatement};
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum SealionError {
+    #[error(transparent)]
+    RusqliteError(#[from] rusqlite::Error)
+}
+
+type SealionResult<T> = result::Result<T, SealionError>;
 
 pub trait Row: Sized {
     /// Returns a slice of the column names for this row.
@@ -11,9 +22,10 @@ pub trait Row: Sized {
 
     /// Returns an iterator of `Self` from an rusqlite prepared statement.
     /// It is expected that the prepared statement is a select query of somekind.
-    fn from_statement<'stmt, P: Params>(statement: &'stmt mut Statement, params: P) -> rusqlite::Result<MappedRows<'stmt, fn(&rusqlite::Row) -> rusqlite::Result<Self>>> {
+    fn from_statement<'stmt, P: Params>(statement: &'stmt mut Statement, params: P) -> SealionResult<MappedRows<'stmt, fn(&rusqlite::Row) -> rusqlite::Result<Self>>> {
         check_columns(&statement, Self::columns());
-        statement.query_map(params, Self::parse_row)
+        statement.query_map(params, Self::parse_row as fn(&rusqlite::Row) -> rusqlite::Result<Self>)
+            .map_err(|err| SealionError::RusqliteError(err))
     }
 }
 
@@ -56,18 +68,40 @@ impl SelectQuery {
         format!("SELECT {} FROM {}", columns.join(", "), self.table_name)
     }
 
-    pub fn prepare_statement_columns<'conn>(&self, connection: &'conn Connection, columns: &[&str]) -> rusqlite::Result<CachedStatement<'conn>> {
+    pub fn prepare_statement_columns<'conn>(&self, connection: &'conn Connection, columns: &[&str]) -> SealionResult<CachedStatement<'conn>> {
         connection.prepare_cached(&self.build_sql_string(columns))
+            .map_err(|err| SealionError::RusqliteError(err))
     }
 
-    pub fn prepare_statement<'conn, R: Row>(&self, connection: &'conn Connection) -> rusqlite::Result<CachedStatement<'conn>> {
+    pub fn prepare_statement<'conn, R: Row>(&self, connection: &'conn Connection) -> SealionResult<CachedStatement<'conn>> {
         self.prepare_statement_columns(connection, R::columns())
     }
 
-    pub fn execute<R: Row>(&self, connection: &Connection) -> rusqlite::Result<Vec<R>> {
+    pub fn execute<R: Row>(&self, connection: &Connection) -> SealionResult<Vec<R>> {
         let mut statement = self.prepare_statement::<R>(connection)?;
         let rows_iterator = R::from_statement(&mut statement, [])?;
-        rows_iterator.collect()
+        
+        rows_iterator.collect::<rusqlite::Result<Vec<R>>>()
+            .map_err(|err| SealionError::RusqliteError(err))
+    }
+
+    /// Similar to execute, but instead of failing-fast on collection, this method will instead iterate
+    /// through all the rows, attempt to parse them, and return every error and result.
+    pub fn execute_collect_errors<R: Row>(&self, connection: &Connection) -> SealionResult<(Vec<R>, Vec<SealionError>)> {
+        let mut statement = self.prepare_statement::<R>(connection)?;
+        
+        let mut parsing_errors: Vec<SealionError> = Vec::new();
+        let values: Vec<R> = R::from_statement(&mut statement, [])?
+            .filter_map(|result| match result {
+                Ok(row) => Some(row),
+                Err(err) => {
+                    parsing_errors.push(SealionError::RusqliteError(err));
+                    None
+                }
+            })
+            .collect();
+        
+        Ok((values, parsing_errors))
     }
 }
 
