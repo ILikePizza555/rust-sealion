@@ -150,7 +150,7 @@ mod tests {
         }
     }
 
-    fn setup_test_db() -> SealionResult<Connection> {
+    fn setup_test_db() -> rusqlite::Result<Connection> {
         let connection = rusqlite::Connection::open_in_memory()?;
         connection.execute("CREATE TABLE test_table (id INTEGER PRIMARY KEY, name TEXT NOT NULL, optional TEXT)", [])?;
         let rows_modified = connection.execute(r#" INSERT INTO test_table (id, name, optional) VALUES
@@ -187,6 +187,19 @@ mod tests {
             TestRow { id: 2, name: "Peach".to_string(), optional: Some("Raspberry".to_string()) }
         ]);
 
+        Ok(())
+    }
+
+    #[test]
+    fn select_with_where_clause() -> SealionResult<()> {
+        let connection = setup_test_db()?;
+
+        let rows: Vec<TestRow> = SelectQuery::new("test_table")
+            .r#where("optional IS NOT NULL").execute(&connection)?;
+        assert_eq!(rows, vec![
+            TestRow { id: 0, name: "Orange".to_string(), optional: Some("Strawberry".to_string()) },
+            TestRow { id: 2, name: "Peach".to_string(), optional: Some("Raspberry".to_string()) }
+        ]);
         Ok(())
     }
 }
