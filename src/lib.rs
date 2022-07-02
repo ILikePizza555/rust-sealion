@@ -1,11 +1,13 @@
 use std::result;
-
+use std::fmt::Write;
+use thiserror::Error;
 use log::warn;
 use rusqlite::{Statement, Params, MappedRows, Connection, CachedStatement};
-use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum SealionError {
+    #[error(transparent)]
+    IoError(#[from] std::fmt::Error),
     #[error(transparent)]
     RusqliteError(#[from] rusqlite::Error)
 }
@@ -56,20 +58,36 @@ fn check_columns(statement: &Statement, columns: &[& str]) {
 }
 
 pub struct SelectQuery {
-    table_name: String,
+    pub table_name: String,
+    pub where_clause: Option<String>
 }
 
 impl SelectQuery {
     pub fn new<S: ToString>(table_name: S) -> Self {
-        Self { table_name: table_name.to_string() }
+        Self { 
+            table_name: table_name.to_string(),
+            where_clause: None
+        }
     }
 
-    pub fn build_sql_string(&self, columns: &[&str]) -> String {
-        format!("SELECT {} FROM {}", columns.join(", "), self.table_name)
+    pub fn r#where<S: ToString>(&mut self, where_clause: S) -> &mut Self {
+        self.where_clause = Some(where_clause.to_string());
+        self
+    }
+
+    pub fn build_sql_string(&self, columns: &[&str]) -> SealionResult<String> {
+        let mut sql_string = format!("SELECT {} ", columns.join(", "));
+        write!(sql_string, "FROM {} ", self.table_name)?;
+        
+        if let Some(where_string) = &self.where_clause {
+            write!(sql_string, "WHERE {}", where_string)?;
+        }
+
+        Ok(sql_string)
     }
 
     pub fn prepare_statement_columns<'conn>(&self, connection: &'conn Connection, columns: &[&str]) -> SealionResult<CachedStatement<'conn>> {
-        connection.prepare_cached(&self.build_sql_string(columns))
+        connection.prepare_cached(&self.build_sql_string(columns)?)
             .map_err(|err| SealionError::RusqliteError(err))
     }
 
@@ -109,7 +127,7 @@ impl SelectQuery {
 mod tests {
     use rusqlite::Connection;
 
-    use crate::{Row, SelectQuery};
+    use crate::{Row, SelectQuery, SealionResult};
 
     #[derive(Debug, PartialEq, Eq)]
     struct TestRow {
@@ -119,7 +137,7 @@ mod tests {
     }
 
     impl Row for TestRow {
-        fn columns<'a>() -> &'a[&'a str] {
+        fn columns<'a>() -> &'a[ &'a str] {
             &["id", "name", "optional"]
         }
 
@@ -132,7 +150,7 @@ mod tests {
         }
     }
 
-    fn setup_test_db() -> Result<Connection, rusqlite::Error> {
+    fn setup_test_db() -> SealionResult<Connection> {
         let connection = rusqlite::Connection::open_in_memory()?;
         connection.execute("CREATE TABLE test_table (id INTEGER PRIMARY KEY, name TEXT NOT NULL, optional TEXT)", [])?;
         let rows_modified = connection.execute(r#" INSERT INTO test_table (id, name, optional) VALUES
@@ -144,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn select_low_level() -> Result<(), rusqlite::Error> {
+    fn select_low_level() -> SealionResult<()> {
         let connection = setup_test_db()?;
         
         let rows: Vec<rusqlite::Result<TestRow>> = 
@@ -159,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn select_with_query() -> Result<(), rusqlite::Error> {
+    fn select_with_query() -> SealionResult<()> {
         let connection = setup_test_db()?;
 
         let rows: Vec<TestRow> = SelectQuery::new("test_table").execute(&connection)?;
